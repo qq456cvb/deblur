@@ -7,26 +7,87 @@ LAMBDA = 2e-3
 
 
 def shock_filter(img):
-    img = cv2.blur(img, ksize=(3, 3))
-    it = 10
-    dt = 0.01
+    img = cv2.GaussianBlur(img, ksize=(3, 3), sigmaX=0)
+    it = 20
+    dt = 0.1
     for i in range(it):
-        Ix = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=3)
-        Iy = cv2.Sobel(img, cv2.CV_64F, 0, 1, ksize=3)
-        Ixx = cv2.Sobel(Ix, cv2.CV_64F, 1, 0, ksize=3)
-        Ixy = cv2.Sobel(Ix, cv2.CV_64F, 0, 1, ksize=3)
-        Iyy = cv2.Sobel(Iy, cv2.CV_64F, 0, 1, ksize=3)
+        Ix = signal.convolve2d(img, np.array([[-1, 0, 1]]) / 2, mode='same')
+        Iy = signal.convolve2d(img, np.array([[-1], [0], [1]]) / 2, mode='same')
+        Ixx = signal.convolve2d(Ix, np.array([[-1, 0, 1]]) / 2, mode='same')
+        Ixy = signal.convolve2d(Iy, np.array([[-1, 0, 1]]) / 2, mode='same')
+        Iyy = signal.convolve2d(Iy, np.array([[-1], [0], [1]]) / 2, mode='same')
         img -= dt * np.sign(Ix * Ix * Ixx + 2 * Ix * Iy * Ixy + Iy * Iy * Iyy) * np.linalg.norm(np.stack([Ix, Iy], -1), axis=-1)
-    cv2.imshow('shock_filtered', img)
-    cv2.waitKey(30)
+    # cv2.imshow('shock_filtered', img)
+    # cv2.waitKey(0)
     return img
 
 
-# The algorithm is not clear stated in the paper, neither the parameters, try to implement, but failed
 if __name__ == '__main__':
-    ksize = 25
-    image = cv2.imread('lion.gif')
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.
+    img = cv2.imread('toy.jpg')
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.
+
+    # cv2.imshow('blurred', img)
+    # cv2.waitKey(30)
+
+    n_pyramids = 4
+    pyramids = [img]
+    ksizes = [95]
+    for i in range(n_pyramids - 1):
+        pyramids.append(cv2.pyrDown(pyramids[-1]))
+        ksizes.append(ksizes[-1] / 2)
+    
+    pyramids = list(reversed(pyramids))
+    ksizes = list(reversed(ksizes))
+    for i, ksize in enumerate(ksizes):
+        ksizes[i] = int(ksize)
+        if ksizes[i] % 2 == 0:
+            ksizes[i] += 1
+
+    print(ksizes)
+    
+    L = pyramids[0]
+    for i, B in enumerate(pyramids[:-1]):
+        
+        # FIXME: border should not contribute to the final optimization
+        ksize = ksizes[i]
+        Bx = signal.convolve2d(B, np.array([[-1, 0, 1]]) / 2, mode='same')
+        By = signal.convolve2d(B, np.array([[-1], [0], [1]]) / 2, mode='same')
+        convx = signal.convolve2d(Bx, np.ones((ksize, ksize)), mode='same')
+        convy = signal.convolve2d(By, np.ones((ksize, ksize)), mode='same')
+        r = np.linalg.norm(np.stack([convx, convy], -1), axis=-1) / \
+            (signal.convolve2d(np.linalg.norm(np.stack([Bx, By], -1), axis=-1), np.ones((ksize, ksize)),
+                            mode='same') + 0.5 / 255.)
+        cv2.imshow('r map', r)
+        cv2.waitKey(30)
+
+        grad_angle = np.arctan2(By, Bx)
+        grad_angle[grad_angle < 0] += np.pi
+        angle_masks = np.stack([
+            grad_angle < np.pi / 4,
+            (grad_angle > np.pi / 4) |  (grad_angle < np.pi / 2),
+            (grad_angle > np.pi / 2) |  (grad_angle < 3 * np.pi / 4),
+            grad_angle > 3 * np.pi / 4
+        ])
+        # print(np.sum(angle_masks[0]), np.sum(angle_masks[1]), np.sum(angle_masks[2]), np.sum(angle_masks[3]))
+        # import pdb; pdb.set_trace()
+        for j in range(10):
+            I_tilde = shock_filter(L)
+            I_tilde_grad = np.stack([signal.convolve2d(I_tilde, np.array([[-1, 0, 1]]) / 2, mode='same'),
+                signal.convolve2d(I_tilde, np.array([[-1], [0], [1]]) / 2, mode='same')], -1)
+            if j == 0:
+                tau_r_num = int(0.5 * np.sqrt(grad_angle.shape[0] * grad_angle.shape[1]) * ksize)
+                tau_s_num = 2 * ksize
+                tau_r = np.min([-np.partition(-r[mask], tau_r_num)[tau_r_num] for mask in angle_masks])
+                tau_s = max([np.min([-np.partition(-I_tilde_grad[mask][..., k], tau_s_num)[tau_s_num] for mask in angle_masks]) for k in range(2)])
+
+            I_grad_s = I_tilde_grad * np.heaviside(np.heaviside(r - tau_r, 0) * np.linalg.norm(I_tilde_grad, axis=-1) - tau_s, 0)[..., None]
+            cv2.imshow('selected edge', np.linalg.norm(I_grad_s, axis=-1))
+            cv2.waitKey()
+            tau_r /= 1.1
+            tau_s /= 1.1
+            L = B
+            
+    exit()
 
     n_pyramids = 1
     pyramids = [image]
@@ -55,7 +116,7 @@ if __name__ == '__main__':
             (signal.convolve2d(np.linalg.norm(np.stack([Bx, By], -1), axis=-1), np.ones((ksizes[i], ksizes[i])),
                                mode='same') + 0.5 / 255.)
         cv2.imshow('r map', r)
-        cv2.waitKey(30)
+        cv2.waitKey(0)
         I = img
         B = img
         for it in range(10):
