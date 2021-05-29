@@ -5,8 +5,8 @@ from scipy import signal
 
 def shock_filter(img):
     img = cv2.GaussianBlur(img, ksize=(3, 3), sigmaX=0)
-    it = 10
-    dt = 0.01
+    it = 100
+    dt = 1e-3
     for i in range(it):
         Ix = signal.convolve2d(img, np.array([[-1, 0, 1]]) / 2, mode='same')
         Iy = signal.convolve2d(img, np.array([[-1], [0], [1]]) / 2, mode='same')
@@ -76,7 +76,7 @@ if __name__ == '__main__':
         angle_masks[:, 0] = angle_masks[:, -1] = angle_masks[:, :, 0] = angle_masks[:, :, -1] = False
         # print(np.sum(angle_masks[0]), np.sum(angle_masks[1]), np.sum(angle_masks[2]), np.sum(angle_masks[3]))
         # import pdb; pdb.set_trace()
-        for j in range(30):
+        for j in range(20):
             I_tilde = shock_filter(L)
             I_tilde_grad = np.stack([signal.convolve2d(I_tilde, np.array([[-1, 0, 1]]) / 2, mode='same'),
                 signal.convolve2d(I_tilde, np.array([[-1], [0], [1]]) / 2, mode='same')], -1)
