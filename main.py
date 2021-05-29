@@ -29,13 +29,13 @@ def img_double(img):
 if __name__ == '__main__':
     img = cv2.imread('toy.jpg')
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.
-
-    # cv2.imshow('blurred', img)
-    # cv2.waitKey(30)
+    
+    # image too large reduce size
+    img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
 
     n_pyramids = 4
     pyramids = [img]
-    ksizes = [95]
+    ksizes = [47]
     for i in range(n_pyramids - 1):
         pyramids.append(cv2.pyrDown(pyramids[-1]))
         ksizes.append(ksizes[-1] / 2)
@@ -50,7 +50,7 @@ if __name__ == '__main__':
     print(ksizes)
     
     L = pyramids[0]
-    for i, B in enumerate(pyramids[:-1]):
+    for i, B in enumerate(pyramids):
         
         # FIXME: border should not contribute to the final optimization
         ksize = ksizes[i]
@@ -140,4 +140,6 @@ if __name__ == '__main__':
         vis_kernel[:half_ksize, :half_ksize] = kernel[-half_ksize:, -half_ksize:]
         vis_kernel[half_ksize:, half_ksize:] = kernel[:half_ksize+1, :half_ksize+1]
         cv2.imshow('kernel', vis_kernel / vis_kernel.max())
-        cv2.waitKey(0)
+        cv2.waitKey(30)
+    
+    cv2.waitKey()
