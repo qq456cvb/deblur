@@ -1,6 +1,21 @@
 import cv2
 import numpy as np
 from scipy import signal
+from skimage.util import view_as_windows as viewW
+
+
+# https://stackoverflow.com/questions/30109068/implement-matlabs-im2col-sliding-in-python
+def im2col_sliding_strided(A, BSZ, stepsize=1):
+    # Parameters
+    m,n = A.shape
+    s0, s1 = A.strides    
+    nrows = m-BSZ[0]+1
+    ncols = n-BSZ[1]+1
+    shp = BSZ[0],BSZ[1],nrows,ncols
+    strd = s0,s1,s0,s1
+    
+    out_view = np.lib.stride_tricks.as_strided(A, shape=shp, strides=strd)
+    return out_view.reshape(BSZ[0]*BSZ[1], -1)[:,::stepsize]
 
 
 def shock_filter(img):
@@ -33,6 +48,7 @@ if __name__ == '__main__':
     # image too large reduce size
     img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
 
+    # Phase One
     n_pyramids = 4
     pyramids = [img]
     ksizes = [47]
@@ -50,7 +66,7 @@ if __name__ == '__main__':
     print(ksizes)
     
     L = pyramids[0]
-    for i, B in enumerate(pyramids):
+    for i, B in enumerate(pyramids[:-1]):
         
         # FIXME: border should not contribute to the final optimization
         ksize = ksizes[i]
@@ -142,4 +158,42 @@ if __name__ == '__main__':
         cv2.imshow('kernel', vis_kernel / vis_kernel.max())
         cv2.waitKey(30)
     
-    cv2.waitKey()
+
+    # Phase Two
+    k0 = vis_kernel
+    ksize = k0.shape[0]
+    half_ksize = k0.shape[0] // 2
+    def select_S(kernel, i, ksize):
+        kernel_sorted = np.sort(kernel)
+        largest = kernel_sorted[-1]
+        diff = kernel_sorted[1:] - kernel_sorted[:-1]
+        thresh = kernel_sorted[-2]
+        for j in range(diff.size):
+            if diff[j] > largest / (2 * ksize * (i + 1)):
+                thresh = kernel_sorted[j]
+                break
+        return kernel > thresh
+
+    A = np.concatenate([im2col_sliding_strided(I_tilde_grad[..., 0], (k0.shape[0], k0.shape[1])).T, 
+        im2col_sliding_strided(I_tilde_grad[..., 1], (k0.shape[0], k0.shape[1])).T], 0)
+    VB = np.concatenate([Bx[half_ksize:-half_ksize, half_ksize:-half_ksize].reshape(-1), By[half_ksize:-half_ksize, half_ksize:-half_ksize].reshape(-1)], 0)
+
+    Vk = k0.reshape(-1)
+    S = select_S(Vk, 0, ksize)
+    while True:
+        VS_bar = np.ones_like(Vk, dtype=np.bool)
+        VS_bar[S] = False
+        psi = max(np.sum(np.abs(Vk)), 1e-5)
+        Vk_new = np.linalg.lstsq(A.T @ A + 1. * np.diag(VS_bar / psi).astype(np.float), A.T @ VB)[0]
+        Vk_new[Vk_new < 0] = 0
+        Vk_new /= Vk_new.sum()
+        S = select_S(Vk_new, 0, ksize)
+        if np.linalg.norm(Vk_new - Vk) / np.linalg.norm(Vk) <= 1e-3:
+            break
+        else:
+            Vk = Vk_new
+    ks = Vk.reshape(ksize, ksize)
+    cv2.imshow('kernel s', ks / ks.max())
+    cv2.waitKey(30)
+    
+    # Fast TV-l1 Deconvolution
