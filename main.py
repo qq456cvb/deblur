@@ -20,8 +20,8 @@ def im2col_sliding_strided(A, BSZ, stepsize=1):
 
 def shock_filter(img):
     img = cv2.GaussianBlur(img, ksize=(3, 3), sigmaX=0)
-    it = 100
-    dt = 1e-3
+    it = 10
+    dt = 0.25 / 255.
     for i in range(it):
         Ix = signal.convolve2d(img, np.array([[-1, 0, 1]]) / 2, mode='same')
         Iy = signal.convolve2d(img, np.array([[-1], [0], [1]]) / 2, mode='same')
@@ -42,11 +42,12 @@ def img_double(img):
 
 
 if __name__ == '__main__':
-    img = cv2.imread('toy.jpg')
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.
+    rgb = cv2.imread('toy.jpg')
+    img = cv2.cvtColor(rgb, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.
     
     # image too large reduce size
     img = cv2.resize(img, (0, 0), fx=0.5, fy=0.5)
+    rgb = cv2.resize(rgb.astype(np.float32) / 255., (0, 0), fx=0.5, fy=0.5)
 
     # Phase One
     n_pyramids = 4
@@ -66,7 +67,7 @@ if __name__ == '__main__':
     print(ksizes)
     
     L = pyramids[0]
-    for i, B in enumerate(pyramids[:-1]):
+    for i, B in enumerate(pyramids[:]):
         
         # FIXME: border should not contribute to the final optimization
         ksize = ksizes[i]
@@ -92,7 +93,7 @@ if __name__ == '__main__':
         angle_masks[:, 0] = angle_masks[:, -1] = angle_masks[:, :, 0] = angle_masks[:, :, -1] = False
         # print(np.sum(angle_masks[0]), np.sum(angle_masks[1]), np.sum(angle_masks[2]), np.sum(angle_masks[3]))
         # import pdb; pdb.set_trace()
-        for j in range(20):
+        for j in range(100):
             I_tilde = shock_filter(L)
             I_tilde_grad = np.stack([signal.convolve2d(I_tilde, np.array([[-1, 0, 1]]) / 2, mode='same'),
                 signal.convolve2d(I_tilde, np.array([[-1], [0], [1]]) / 2, mode='same')], -1)
@@ -115,15 +116,15 @@ if __name__ == '__main__':
             fftedges = np.fft.fft2(img_double(I_grad_s), axes=[0, 1])
             
             fftk = (np.conjugate(fftedges[..., 0]) * fftgradb[..., 0] + np.conjugate(fftedges[..., 1]) * fftgradb[..., 1]) \
-                             / (np.square(np.absolute(fftedges[..., 0])) + np.square(np.absolute(fftedges[..., 1])) + 10.)
+                             / (np.square(np.absolute(fftedges[..., 0])) + np.square(np.absolute(fftedges[..., 1])) + 100.)
             k = np.real(np.fft.ifft2(fftk))
             kernel = np.zeros_like(k)
             kernel[:half_ksize+1, :half_ksize+1] = k[:half_ksize+1, :half_ksize+1]
             kernel[-half_ksize:, -half_ksize:] = k[-half_ksize:, -half_ksize:]
+            kernel[:half_ksize+1, -half_ksize:] = k[:half_ksize+1, -half_ksize:]
+            kernel[-half_ksize:, :half_ksize+1] = k[-half_ksize:, :half_ksize+1]
             kernel[kernel < 0] = 0
             kernel /= kernel.sum()
-            # print(kernel[:half_ksize+1, :half_ksize+1])
-            # print(kernel[-half_ksize:, -half_ksize:])
             # cv2.imshow('kernel estimation', kernel)
             # cv2.waitKey()
             scharr_x, scharr_y = np.zeros_like(kernel), np.zeros_like(kernel)
@@ -155,10 +156,11 @@ if __name__ == '__main__':
         vis_kernel = np.zeros((ksize, ksize))
         vis_kernel[:half_ksize, :half_ksize] = kernel[-half_ksize:, -half_ksize:]
         vis_kernel[half_ksize:, half_ksize:] = kernel[:half_ksize+1, :half_ksize+1]
+        vis_kernel[:half_ksize, half_ksize:] = kernel[-half_ksize:, :half_ksize+1]
+        vis_kernel[half_ksize:, :half_ksize] = kernel[:half_ksize+1, -half_ksize:]
         cv2.imshow('kernel', vis_kernel / vis_kernel.max())
         cv2.waitKey(30)
     
-
     # Phase Two
     k0 = vis_kernel
     ksize = k0.shape[0]
@@ -189,11 +191,72 @@ if __name__ == '__main__':
         Vk_new /= Vk_new.sum()
         S = select_S(Vk_new, 0, ksize)
         if np.linalg.norm(Vk_new - Vk) / np.linalg.norm(Vk) <= 1e-3:
+            Vk = Vk_new
             break
         else:
             Vk = Vk_new
-    ks = Vk.reshape(ksize, ksize)
-    cv2.imshow('kernel s', ks / ks.max())
-    cv2.waitKey(30)
+    k = Vk.reshape(ksize, ksize)
+    # cv2.imshow('kernel s', k / k.max())
+    # cv2.waitKey(30)
     
     # Fast TV-l1 Deconvolution
+    scaling = 1.
+    beta0 = 1. / scaling
+    beta_min = 1e-2 / scaling
+    lmda = 2e-2
+    theta0 = (1. / lmda) / scaling
+    theta_min = 1e-2 / scaling
+
+
+    I = B
+    beta = beta0
+
+    
+    kernel = np.zeros((I.shape[0] * 2, I.shape[1] * 2))
+    kernel[:half_ksize+1, :half_ksize+1] = k[half_ksize:, half_ksize:]
+    kernel[-half_ksize:, -half_ksize:] = k[:half_ksize, :half_ksize]
+    kernel[:half_ksize+1, -half_ksize:] = k[half_ksize:, :half_ksize]
+    kernel[-half_ksize:, :half_ksize+1] = k[:half_ksize, half_ksize:]
+    fftk = np.fft.fft2(kernel)
+    
+    scharr_x, scharr_y = np.zeros_like(kernel), np.zeros_like(kernel)
+    scharr_x[0, 1] = 0.5
+    scharr_x[0, -1] = -0.5
+    scharr_y[1, 0] = 0.5
+    scharr_y[-1, 0] = -0.5
+    fftdx = np.fft.fft2(scharr_x)
+    fftdy = np.fft.fft2(scharr_y)
+
+    while True:
+        Ik = signal.convolve2d(I, k, mode='same')
+        Ik_B = Ik - B
+        v = np.sign(Ik_B) * np.maximum(np.abs(Ik_B) - beta, 0)
+        # import pdb; pdb.set_trace()
+        # cv2.imshow('v', v / v.max())
+        # if cv2.waitKey(0) == 27:
+        #     exit()
+        theta = theta0
+        while True:
+            I_grad = np.stack([signal.convolve2d(I, np.array([[-1, 0, 1]]) / 2, mode='same'),
+                signal.convolve2d(I, np.array([[-1], [0], [1]]) / 2, mode='same')], -1)
+            I_grad_norm = np.linalg.norm(I_grad, axis=-1)
+            w = I_grad / (I_grad_norm[..., None] + 1e-7) * np.maximum(I_grad_norm[..., None] - theta * lmda, 0)
+            # cv2.imshow('w', np.abs(w[..., 0]))
+            # if cv2.waitKey(0) == 27:
+            #     exit()
+            # import pdb; pdb.set_trace()
+            fftw = np.fft.fft2(img_double(w), axes=[0, 1])
+            I = np.real(np.fft.ifft2((np.conjugate(fftk) * np.fft.fft2(img_double(B + v)) + 0 * (np.conjugate(fftdx) * fftw[..., 0] + np.conjugate(fftdy) * fftw[..., 1]))
+                / (np.conjugate(fftk) * fftk + 0 * (np.conjugate(fftdx) * fftdx + np.conjugate(fftdy) * fftdy))))
+            I = np.clip(I[:I.shape[0] // 2, :I.shape[1] // 2], 0, 1)
+            theta /= 2.
+            if theta < theta_min:
+                break
+            cv2.imshow('I image', I)
+            cv2.waitKey(30)
+        beta /= 2
+        if beta <= beta_min:
+            break
+    
+    cv2.imshow('restored image', I)
+    cv2.waitKey()

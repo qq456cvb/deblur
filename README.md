@@ -6,7 +6,7 @@ Original Image
 ![Original Image](toy.jpg)
 
 Latent Image
-![Latent Image](latent.png)
+![Latent Image](restored.png)
 
 # problems
 - There are some ringing and bordering effects in the estimated latent image. It is not clear how the author handles this.
