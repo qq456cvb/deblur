@@ -1,49 +1,50 @@
-# deblur
-
-<!-- README refined by Cursor -->
-
-Two-Phase Kernel Estimation for Robust Motion Deblurring
-
-## Overview
-
-This repository contains Python code from an older research, course, or prototype project. The README has been refreshed to make the repository easier to scan while preserving the original notes below.
-
-## Repository Contents
-
-- Top-level source files and project assets.
-
-## Setup
-
-- This legacy repo does not pin a full environment. Start from the language/toolchain implied by the source files, then install missing packages as reported by the runtime.
-
-## Usage
-
-- `python main.py`
-
-## Data and Artifacts
-
-No new large artifact is stored in this repository. If a dataset or checkpoint is required, follow the links and notes in the original section below.
-
-## Status
-
-This is a `Batch B` cleanup pass for a legacy repository. Commands may require dependency/version adjustments on a modern machine.
-
-## License
-
-No explicit license file was found in this checkout; check the original project context before reusing code.
-
-## Original Notes
-
 # Two-Phase Kernel Estimation for Robust Motion Deblurring
-## This is an unofficial python implementation of the deblurring algorithm, currently, the first phase is finished.
 
-# Results
-Original Image
-![Original Image](toy.jpg)
+An unofficial Python/NumPy implementation of [Two-Phase Kernel Estimation for Robust Motion Deblurring](https://doi.org/10.1007/978-3-642-15549-9_12) (Xu & Jia, ECCV 2010) — blind motion deblurring of a single image, written from scratch with OpenCV/SciPy (no deep learning).
 
-Latent Image
-![Latent Image](restored.png)
+## What's Implemented
 
-# problems
-- There are some ringing and bordering effects in the estimated latent image. It is not clear how the author handles this.
-- In the inverse FFT for solving kernel, kernel values are not always positive (not even real) and kernel values do not sum to 1. How does the author handle this? Currently, I simply project the kernel into the valid solution manifold. Maybe a better solution is to introduce a Lagrange multiplier.
+**Phase 1 — coarse-to-fine kernel estimation** (4-level image pyramid):
+
+- Edge prediction by shock filtering the current latent estimate
+- Gradient-confidence map `r` and informative-edge selection with per-orientation thresholds (`tau_r`, `tau_s`), gradually relaxed (`/1.1`) each iteration so more edges join as the kernel improves
+- Closed-form FFT kernel estimation from selected edge gradients with Tikhonov regularization, projected back to a valid kernel (non-negative, sum to 1)
+- FFT latent-image update with a spatial gradient prior
+
+**Phase 2 — kernel refinement and final deconvolution**:
+
+- ISD-style kernel refinement: iterative support detection that re-solves the kernel least-squares with adaptive sparsity regularization outside the detected support
+- Fast TV-ℓ1 deconvolution via half-quadratic splitting to recover the final latent image
+
+## Run
+
+```bash
+pip install opencv-python numpy scipy scikit-image
+python main.py
+```
+
+Runs on the bundled `toy.jpg` (downscaled 2x, kernel size 47) and shows the evolving kernel and latent image; press `Esc` to abort. Pure NumPy/FFT — expect a few minutes.
+
+## Results
+
+| Blurred input | Restored latent image |
+|---|---|
+| ![Original Image](toy.jpg) | ![Latent Image](restored.png) |
+
+## Known Issues
+
+- Some ringing and border artifacts remain in the estimated latent image; it is unclear how the authors handle boundary conditions.
+- The inverse FFT of the kernel solve can yield negative (even complex) values that do not sum to 1. This implementation simply projects the kernel onto the valid solution manifold; a Lagrange-multiplier formulation might be cleaner.
+
+## Reference
+
+```bibtex
+@inproceedings{xu2010two,
+  title={Two-Phase Kernel Estimation for Robust Motion Deblurring},
+  author={Xu, Li and Jia, Jiaya},
+  booktitle={European Conference on Computer Vision (ECCV)},
+  pages={157--170},
+  year={2010},
+  organization={Springer}
+}
+```
